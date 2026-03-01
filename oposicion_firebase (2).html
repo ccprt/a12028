@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="theme-color" content="#0d0d10">
+<title>Oposición A1.2028 · Tracker</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500&family=Lato:wght@300;400&display=swap" rel="stylesheet">
+
+<!-- ═══════════════════════════════════════════════════════════
+     ⚠️  CONFIGURACIÓN FIREBASE  ⚠️
+     
+     PASO 1: Ve a https://console.firebase.google.com
+     PASO 2: Crea un proyecto nuevo (o usa uno existente)
+     PASO 3: En el proyecto → "Añadir app" → icono Web (</>)
+     PASO 4: Registra la app, copia los datos de firebaseConfig
+             y pégalos AQUÍ abajo reemplazando los valores de ejemplo
+     PASO 5: En Firebase Console → Authentication → Proveedores
+             → Habilita "Google"
+     PASO 6: En Firebase Console → Firestore Database → Crear base
+             de datos → Modo producción → elige región (europe-west1)
+     PASO 7: En Firestore → Reglas → pega esto y publica:
+     
+       rules_version = '2';
+       service cloud.firestore {
+         match /databases/{database}/documents {
+           match /users/{userId}/{document=**} {
+             allow read, write: if request.auth != null && request.auth.uid == userId;
+           }
+         }
+       }
+     
+     PASO 8: Abre este archivo en Chrome y listo ✓
+═══════════════════════════════════════════════════════════ -->
+
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
+  from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+import { getFirestore, doc, getDoc, setDoc, onSnapshot }
+  from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDZj3pbs9N3nFX5Wy4yVUZueG306ub22n4",
+  authDomain: "a12028.firebaseapp.com",
+  projectId: "a12028",
+  storageBucket: "a12028.firebasestorage.app",
+  messagingSenderId: "569441644238",
+  appId: "1:569441644238:web:4f4e7c69c92f3b075bea9f",
+  measurementId: "G-V50T4YLCX1"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app, '(default)');
+
+let currentUser = null;
+let localState = {};
+let saveTimeout = null;
+let unsubscribe = null;
+
+// ─── CONFIG CHECK ───
+const isConfigured = firebaseConfig.apiKey !== "TU_API_KEY";
+
+// ─── AUTH ───
+window.loginGoogle = async () => {
+  if (!isConfigured) { showSetupModal(); return; }
+  try {
+    const provider = new GoogleAuthProvider();
+    await signInWithPopup(auth, provider);
+  } catch(e) {
+    if (e.code !== 'auth/popup-closed-by-user') {
+      showToast('Error al iniciar sesión: ' + e.message, 'error');
+    }
+  }
+};
+
+window.logoutUser = async () => {
+  if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+  await signOut(auth);
+};
+
+onAuthStateChanged(auth, async (user) => {
+  currentUser = user;
+  if (user) {
+    renderUserBar(user);
+    await loadFromFirestore(user.uid);
+    subscribeToFirestore(user.uid);
+    hideLoginScreen();
+  } else {
+    showLoginScreen();
+    renderUserBar(null);
+  }
+});
+
+// ─── FIRESTORE ───
+async function loadFromFirestore(uid) {
+  try {
+    showSyncIndicator('Cargando...');
+    const ref = doc(db, 'users', uid, 'progress', 'themes');
+    const snap = await getDoc(ref);
+    if (snap.exists()) {
+      localState = snap.data() || {};
+    } else {
+      localState = {};
+    }
+    refreshAllCards();
+    updateStats();
+    hideSyncIndicator();
+  } catch(e) {
+    showToast('Error cargando datos: ' + e.message, 'error');
+    hideSyncIndicator();
+  }
+}
+
+function subscribeToFirestore(uid) {
+  const ref = doc(db, 'users', uid, 'progress', 'themes');
+  unsubscribe = onSnapshot(ref, (snap) => {
+    if (snap.exists()) {
+      const data = snap.data() || {};
+      // Only update if data differs (avoid loop)
+      if (JSON.stringify(data) !== JSON.stringify(localState)) {
+        localState = data;
+        refreshAllCards();
+        updateStats();
+        showToast('Progreso sincronizado ☁️', 'sync');
+      }
+    }
+  });
+}
+
+async function saveToFirestore() {
+  if (!currentUser) return;
+  try {
+    showSyncIndicator('Guardando...');
+    const ref = doc(db, 'users', currentUser.uid, 'progress', 'themes');
+    await setDoc(ref, localState, { merge: true });
+    hideSyncIndicator();
+    showToast('Guardado en la nube ✓', 'success');
+  } catch(e) {
+    hideSyncIndicator();
+    showToast('Error guardando: ' + e.message, 'error');
+  }
+}
+
+function scheduleSave() {
+  clearTimeout(saveTimeout);
+  saveTimeout = setTimeout(saveToFirestore, 800);
+}
+
+// ─── TEMA DATA ───
+const COMMON = [
+  "La Constitución Española de 1978. Antecedentes. Valores superiores y principios inspiradores. El Estado Social y Democrático de Derecho. Derechos y deberes fundamentales. Los principios rectores de la política social y económica. Garantías y casos de suspensión. El procedimiento de reforma constitucional.",
+  "Los órganos constitucionales. La Corona. Las Cortes Generales. El Congreso de los Diputados y el Senado: Composición y funciones. La función legislativa. El Gobierno del Estado. El Poder Judicial. El Tribunal Constitucional. El Tribunal de Cuentas y el Defensor del Pueblo.",
+  "La organización territorial del Estado en la Constitución Española. Las Comunidades Autónomas: Fundamento constitucional. Los Estatutos de Autonomía. Delimitación de las funciones y competencias del Estado y las Comunidades Autónomas.",
+  "La Administración Local: regulación constitucional. Tipología de los entes locales. Distribución de competencias entre el Estado y las Comunidades Autónomas sobre Administración Local. La Ley de Bases de Régimen Local. La organización territorial de la Comunidad Autónoma de Andalucía.",
+  "El Municipio: organización, competencias, elecciones municipales y regímenes especiales. La Provincia: organización, competencias, elección de los Diputados Provinciales y regímenes especiales. Las relaciones entre las instituciones de la Junta de Andalucía y los entes locales. El Consejo Andaluz de Concertación Local.",
+  "La Comunidad Autónoma de Andalucía: Antecedentes histórico-culturales. El Estatuto de Autonomía para Andalucía: proceso de elaboración, fundamento, estructura y contenido básico. Competencias de la Comunidad Autónoma. Reforma del Estatuto.",
+  "Organización Institucional de la Comunidad Autónoma de Andalucía (I): El Parlamento de Andalucía. Composición, atribuciones y funcionamiento. El Tribunal Superior de Justicia de Andalucía. El Defensor del Pueblo de Andalucía. La Cámara de Cuentas de Andalucía. La Oficina Andaluza contra el Fraude y la Corrupción.",
+  "Organización Institucional de la Comunidad Autónoma de Andalucía (II): La Presidencia de la Junta de Andalucía: Elección, estatuto personal y funciones. El Consejo de Gobierno: Composición, carácter, atribuciones y funcionamiento. Las Comisiones Delegadas y la Comisión General de Viceconsejeros y Viceconsejeras. El Consejo Consultivo de Andalucía: Naturaleza, composición y funciones.",
+  "La Administración de la Comunidad Autónoma de Andalucía. Principios de organización, actuación y atención ciudadana. Organización general. Tipos de órganos. Órganos centrales y territoriales. Entidades instrumentales de la Administración de la Junta de Andalucía. Estatuto de los altos cargos de la Administración.",
+  "La Unión Europea. Los Tratados originarios y modificativos de la Unión Europea. Las instituciones de la Unión Europea. La representación de la Junta de Andalucía ante la Unión Europea. El Derecho de la Unión Europea y sus distintos tipos de fuentes.",
+  "Las libertades fundamentales del mercado interior: libre circulación de trabajadores, libre circulación de mercancías, libre circulación de capitales, libre prestación de servicios y libertad de establecimiento. Las principales políticas comunes, con especial referencia a la política regional de la Unión Europea: Los fondos estructurales y sus objetivos prioritarios. El presupuesto de la Unión Europea.",
+  "La Administración Pública: concepto, caracteres y clasificación. La Administración y el Derecho: El principio de legalidad y sus manifestaciones. Las potestades administrativas. La actividad discrecional de la Administración: límites y control.",
+  "Fuentes del Derecho Administrativo: Clasificación. Jerarquía normativa. La Ley: Concepto y clases. Disposiciones del Ejecutivo con fuerza de Ley. El Reglamento: Concepto y clasificación. La potestad reglamentaria: Fundamento, titularidad y límites. Procedimiento de elaboración de los Reglamentos.",
+  "Los órganos administrativos: Concepto y clases. La competencia: Clases y criterios de delimitación. El acto administrativo: Concepto, clases y elementos. La forma de los actos: La motivación. La eficacia del acto administrativo: la notificación y la publicación. El silencio administrativo, naturaleza y régimen jurídico. La invalidez y revisión de oficio de los actos administrativos. La inderogabilidad singular del reglamento.",
+  "El procedimiento administrativo: Naturaleza y fines. El procedimiento administrativo común. Los principios generales. Abstención y recusación. Los interesados. Derechos del interesado en el procedimiento. Derechos de las personas en sus relaciones con las Administraciones Públicas. Las fases del procedimiento.",
+  "La revisión de los actos administrativos. Revisión de oficio. Los recursos administrativos: concepto, clases y principios generales de su regulación. Actos que agotan la vía administrativa. La jurisdicción contencioso-administrativa: Concepto y naturaleza.",
+  "Los contratos de la Administración (I). Objeto y finalidad. Ámbito subjetivo de aplicación. Calificación de los contratos. El órgano de contratación. Capacidad y solvencia del empresario.",
+  "Los contratos de la Administración (II). Régimen de invalidez. Preparación de contratos por las Administraciones Públicas. Adjudicación de los contratos. Ejecución, modificación y extinción de los contratos.",
+  "La responsabilidad patrimonial de la Administración. Competencias de la Junta de Andalucía. Procedimiento. La responsabilidad de las autoridades y del personal. Responsabilidad de la Administración por actos de sus concesionarios y contratistas. La potestad sancionadora de la Administración Pública: principios y procedimiento para su ejercicio.",
+  "El servicio público. Doctrina clásica y evolución. Las diferentes formas de gestión de los servicios públicos. Las concesiones: naturaleza jurídica y clases. El régimen jurídico de las concesiones: modificación, novación, transmisión y extinción de las concesiones.",
+  "La expropiación forzosa: regulación constitucional. Competencias de la Junta de Andalucía. Naturaleza y justificación de la potestad expropiatoria. Sujetos, objeto y causa. El procedimiento general. Peculiaridades del procedimiento de urgencia. Procedimientos especiales. La reversión de los bienes objeto de la expropiación.",
+  "Los bienes de la Administración: Bienes de dominio público: caracteres; uso y aprovechamiento; afectación y desafectación. Bienes de dominio privado: caracteres, adquisición, disponibilidad y uso. Responsabilidad y sanciones. El patrimonio de la Comunidad Autónoma de Andalucía. Regulación jurídica, concepto y clasificación de los bienes y derechos. El Inventario General de Bienes y Derechos.",
+  "La actividad subvencionadora de la Administración de la Junta de Andalucía y sus Agencias. Concepto, naturaleza y clasificación de las subvenciones. Órganos competentes. El procedimiento de concesión y pago de las subvenciones. Justificación. Reintegro. Control financiero de las subvenciones. Infracciones y sanciones en materia de subvenciones. La Base de Datos de Subvenciones y Ayudas Públicas de la Comunidad Autónoma de Andalucía.",
+  "Regulación de la Función Pública de la Junta de Andalucía. Normas constitucionales. Carácter de la legislación estatal. La Ley 5/2023, de 7 de junio, de la Función Pública de Andalucía: Estructura y contenido. Clases de personal al servicio de la Junta de Andalucía. El personal funcionario: Provisión de puestos, carrera profesional, situaciones administrativas, régimen de incompatibilidades. Normas reguladoras del personal laboral. Contenido general del Convenio Colectivo del personal laboral de la Junta de Andalucía.",
+  "La Hacienda Pública y la Constitución. El presupuesto de la Comunidad Autónoma de Andalucía: Contenido y estructura. Los criterios de clasificación de los créditos presupuestarios. El ciclo presupuestario. Las modificaciones presupuestarias. El procedimiento general de ejecución del gasto público: Fases, órganos competentes y documentos contables.",
+  "El control de la actividad financiera de la Comunidad Autónoma: Concepto y clases. El control interno: La función interventora y sus modalidades: el control financiero y el control financiero permanente. La Intervención General de la Junta de Andalucía. El control externo: La Cámara de Cuentas de Andalucía y el control parlamentario.",
+  "La Administración Electrónica. Gestión de procesos administrativos y simplificación. Las tecnologías de la información y las comunicaciones. La información y los derechos de las personas. Régimen jurídico.",
+  "El ciudadano en sus relaciones con la administración electrónica. Seguridad, privacidad y ciudadanía digital.",
+  "El régimen jurídico de la protección de los datos de carácter personal. Normativa europea y nacional.",
+  "Transparencia y Gobierno Abierto. Colaboración y Participación Ciudadana. La Ley de Transparencia Pública de Andalucía. Derechos y Obligaciones. Publicidad Activa. El Derecho de Acceso a la Información Pública. El Consejo de Transparencia y Protección de Datos de Andalucía.",
+  "Innovación y Administración Pública. El concepto de innovación pública. La estrategia de innovación de Andalucía. El Sistema de Innovación Andaluz. Retos y objetivos de la estrategia.",
+  "Las Administraciones Públicas en su entorno y las políticas públicas. La evaluación de las políticas públicas. La ciudadanía en el centro de la actividad pública y el interés general. La calidad y la atención a la ciudadanía. Evaluación de la calidad de los servicios. Las cartas de servicios. Iniciativas en Andalucía.",
+  "Prevención de riesgos laborales. Normativa estatal de Prevención de Riesgos Laborales: Derechos y obligaciones; Consulta y participación de los trabajadores. Organización de la prevención de riesgos laborales en la Administración de la Junta de Andalucía.",
+  "Conceptos generales: género, discriminación, desigualdad, acción positiva, roles y estereotipos. Discriminación por razón de sexo: discriminación directa e indirecta, discriminación salarial. Acoso por razón de sexo. Discriminación en la publicidad y lenguaje sexista. Igualdad entre mujeres y hombres: igualdad de derechos, de trato y de oportunidades. Transversalidad de género. Concepto de mainstreaming: enfoque integrado de género en las políticas públicas.",
+  "Normativa sobre igualdad. La igualdad de género en la Constitución y en el Estatuto de Autonomía para Andalucía. Normativa para la promoción de la igualdad de género y para la prevención y protección integral contra la violencia de género en Andalucía. La unidad de igualdad y género: funciones. Pertinencia e impacto de género en la normativa: conceptos y objetivos. Comisión de Impacto de Género en los Presupuestos Públicos de la Comunidad Autónoma: objeto y competencias. Violencia de género. Concepto y tipos de violencia hacia las mujeres."
+];
+
+const SPECIFIC = [
+  "El Sistema Nacional de Empleo en España. Organización, estructura y competencias. Marco normativo de las políticas públicas de empleo. La Estrategia Española de Apoyo Activo al Empleo. Plan Anual para el Fomento del Empleo Digno. Los Servicios Públicos de Empleo en España. La Agencia Española de Empleo.",
+  "El Servicio Público de Empleo de Andalucía. Organización, estructura y funciones. Normativa de creación del Servicio Andaluz de Empleo. Principios, funciones y servicios del Servicio Andaluz de Empleo (SAE). Estatutos del SAE.",
+  "El Sistema Público Integrado de Información de los Servicios de Empleo como instrumento de coordinación del Sistema Nacional de Empleo. Finalidad, configuración e integrantes. Concreción de los sistemas informáticos adoptados por el Servicio Andaluz de Empleo.",
+  "La gestión y puesta en marcha de políticas de empleo a través de subvenciones, ayudas, incentivos u otros instrumentos jurídicos. La actividad subvencional de las Administraciones Públicas: regulación y principios. Procedimientos de concesión y gestión de las subvenciones.",
+  "La política social y de empleo e inclusión en la UE. Instituciones y organismos europeos actuantes en materia de empleo. El pilar europeo de derechos sociales. El empleo en la Carta de los Derechos Fundamentales de la Unión Europea.",
+  "Fondos para la financiación de las políticas de empleo. Los Fondos Estructurales y de Inversión Europeos: Objetivos. El Fondo Social Europeo Plus: Objetivos, ámbitos prioritarios y acciones subvencionables. La Unidad Administradora del Fondo Social Europeo (UAFSE): Funciones.",
+  "Aplicación de instrumentos de la Unión Europea que financian las políticas de empleo. Programas Operativos del Fondo Social Europeo en Andalucía.",
+  "Las relaciones laborales y las condiciones de trabajo en España. Ley del Estatuto de los Trabajadores. Derechos y deberes laborales. Salarios y garantías salariales. Clasificación profesional y promoción en el trabajo. La jornada laboral. Movilidad funcional y geográfica. Modificaciones sustanciales de condiciones de trabajo.",
+  "Protección frente a los riesgos sociales. El modelo constitucional de Seguridad Social. Estructura y composición actual del Sistema español de Seguridad Social. Régimen General y regímenes especiales. Acción protectora. Niveles contributivos y asistenciales. Pensiones y prestaciones económicas temporales. Prestaciones contributivas y no contributivas: concepto, tipos y características generales.",
+  "La protección por desempleo en España. La situación legal de desempleo, concepto y clases. Regulación actual y personas protegidas. Acción protectora. La prestación contributiva por desempleo: concepto, objeto, requisitos de las personas beneficiarias para el nacimiento del derecho, cuantía y duración.",
+  "La protección por desempleo de nivel asistencial. El subsidio por desempleo: concepto, objeto, requisitos de las personas beneficiarias para el nacimiento del derecho, cuantía y duración. Especial referencia al subsidio por desempleo a favor de las personas trabajadoras eventuales incluidas en el Régimen Especial Agrario de la Seguridad Social y otros programas que afectan a dicho colectivo. Renta Activa de Inserción: Objetivos, personas beneficiarias y requisitos. Procedimientos y normativa de referencia. Programas y medidas específicas de acción protectora para personas desempleadas que agotan las prestaciones por desempleo.",
+  "El contrato de trabajo. Elementos, eficacia y contenido. Modalidades del contrato de trabajo. La contratación indefinida. Los contratos de trabajo de duración determinada. Los contratos formativos. Contrato a tiempo parcial y contrato de relevo. Trabajo a distancia.",
+  "La comunicación de la contratación laboral a los Servicios Públicos de Empleo: sujetos que intervienen, procedimientos y contenidos, obligaciones de los Servicios Públicos de Empleo. Comunicación de la contratación laboral a través de los medios telemáticos.",
+  "La extinción de la relación de trabajo. Concepto. Clasificación y tipología. La extinción por voluntad conjunta de las partes. Desaparición e incapacidad de una de las partes. La extinción por decisión unilateral de la persona trabajadora; dimisión y resolución causal.",
+  "El despido: Concepto y clases. El despido disciplinario: causas, procedimiento y efectos. El despido por reducción de personal; el despido colectivo: causas empresariales y fuerza mayor; el procedimiento de regulación de empleo, intervención de los representantes de las personas trabajadoras. Especialidades en caso de concurso de acreedores.",
+  "La negociación colectiva y la solución de los conflictos colectivos laborales. El Convenio Colectivo: contenidos y estructura. Intervención de la Administración Pública en el proceso de negociación colectiva.",
+  "La resolución extrajudicial de conflictos laborales. El sistema Extrajudicial de Resolución de Conflictos en Andalucía (SERCLA): Estructura y procedimiento de actuación.",
+  "Estadísticas oficiales de población y empleo en España y Andalucía: El Censo de población, el Padrón continuo de habitantes y la Encuesta de Población Activa. Características generales y principales variables de análisis. La información estadística sobre el Mercado de Trabajo: Principales fuentes de información y variables de análisis. Estadísticas de las Relaciones laborales y de Salarios.",
+  "El Mercado de trabajo en España y Andalucía. Evolución del empleo y del desempleo. Los sectores económicos. Población activa; Población ocupada: asalariada y no asalariada; Población desempleada y población inactiva. Definición y principales características.",
+  "Colectivos con especiales dificultades para el acceso al empleo en Andalucía: caracterización de las personas desempleadas en función de variables que inciden en la empleabilidad. Principales colectivos en desempleo y su evolución.",
+  "El tejido empresarial de Andalucía. Características y presencia en el territorio. Parques tecnológicos e industriales de Andalucía. La promoción empresarial en Andalucía: Organismos públicos y privados de apoyo a la iniciativa empresarial. La empresa y su entorno: La responsabilidad social de la empresa.",
+  "Los sistemas de prospección del mercado laboral: Funciones y principales metodologías de prospección. El Observatorio de las ocupaciones del Servicio Público de Empleo Estatal. El Sistema Permanente de Prospección del Mercado de Trabajo de Andalucía. Nuevos yacimientos de empleo: Conceptos y principales estudios disponibles.",
+  "La investigación social: Diseño e hipótesis. La medición en una investigación social: Dimensiones, variables, indicadores, índices y escalas. Proyecto y fases de la investigación social.",
+  "La encuesta como instrumento de investigación social: Concepto y fases. El cuestionario: Tipos de preguntas. Organización del cuestionario. La entrevista y los grupos de discusión: Concepto, diseño, formación del grupo y funcionamiento. Análisis e interpretación del discurso en la entrevista y en el grupo de discusión.",
+  "La muestra: Teoría y aplicación. Tamaño de la muestra. El error muestral. Tipos de muestreo y métodos de selección de la muestra. Aplicación de la muestra en el ámbito del mercado de trabajo.",
+  "Análisis de datos: Análisis cualitativo y análisis cuantitativo. Programas informáticos para el análisis de datos: Tipos y funcionalidades. Aplicabilidad para describir y analizar el mercado laboral.",
+  "Seguimiento y evaluación de las políticas de empleo. Sistema europeo para la evaluación de las directrices de empleo. La evaluación de las políticas públicas de empleo en el marco de la normativa de empleo.",
+  "Siniestralidad laboral y Prevención de Riesgos Laborales. El accidente de trabajo. Factores psicosociales que influyen en la accidentabilidad. Definición y clasificación. Regulación jurídica de la Prevención de Riesgos Laborales.",
+  "La Prevención de Riesgos Laborales en la Junta de Andalucía. Estrategia Andaluza de Seguridad y Salud Laboral. El Instituto Andaluz de Prevención de Riesgos Laborales. El Consejo Andaluz de Prevención de Riesgos Laborales (CAPRL): composición y funciones. La estructura organizativa de la Prevención de Riesgos Laborales en la Administración de la Junta de Andalucía.",
+  "Ergonomía de la organización. Criterios de diseño organizativo. La comunicación como herramienta de gestión. Funciones de la comunicación. Barreras en los procesos de comunicación organizativa. Asertividad y empatía. Liderazgo: Concepto, tipología e influencia en las dinámicas de la organización. El conflicto en la organización: Génesis y manifestación. Gestión del conflicto. Poder y procesos de influencia en la negociación. Modelos de negociación. Procesos y técnicas de resolución de conflictos.",
+  "Estrés laboral y violencia en el trabajo. El hostigamiento psicológico en el trabajo (mobbing): mecanismos de prevención e intervención. El síndrome de estar quemado (burn-out): definición, fases del proceso, consecuencias. El acoso sexual y el acoso por razón de sexo.",
+  "Las políticas de la Junta de Andalucía para el fomento de empleo y de la contratación. Tipología de subvenciones, ayudas e incentivos. Definición y objetivos, personas beneficiarias y requisitos. Procedimiento. Normativa reguladora.",
+  "Oportunidades para colectivos con especiales dificultades de inserción laboral. Medidas y colectivos preferentes en el marco de la Estrategia Española de Apoyo Activo al Empleo. Centros Especiales de Empleo. Empresas de inserción.",
+  "El fomento del empleo agrario en Andalucía. Contexto y objetivos. Personas beneficiarias y requisitos. Colectivos preferentes. Procedimiento para la gestión de las ofertas de empleo. Procesos de selección de candidaturas. Obligaciones de las personas perceptoras. Normativa de referencia.",
+  "Transversalidad del empleo en las políticas de la Junta de Andalucía: su consideración en los diferentes Planes de Actuación dirigidos a colectivos con especiales dificultades.",
+  "Políticas públicas de empleo para la inmigración. Permisos de trabajo y residencia. Los Servicios Públicos de Empleo en la regularización laboral de la inmigración; inscripción de personas extranjeras. Catálogo de ocupaciones de difícil cobertura. Contingentes. Certificado de insuficiencia de demandantes de empleo adecuados y disponibles para aceptar la oferta. Normativa reguladora.",
+  "Las políticas de igualdad de género en el ámbito del empleo de la Junta de Andalucía. Consideraciones sobre la igualdad de oportunidades ante el empleo en el marco de la Concertación Social. Plan Estratégico para la Igualdad de Mujeres y Hombres en Andalucía.",
+  "Órganos competentes en materia de formación profesional a nivel estatal y autonómico. Consejo General del Sistema Nacional de Empleo. Conferencia Sectorial de Empleo y Asuntos Laborales. Comisión Técnica de Directores Generales de los Servicios Públicos de Empleo. Consejo General de la Formación Profesional. Consejo Andaluz de Formación Profesional.",
+  "El Sistema Nacional de Formación Profesional. Normativa reguladora. El Catálogo Nacional de Estándares de Competencias profesionales. Los Estándares de Competencia. El Catálogo Modular de Formación Profesional. El Instituto Nacional de Cualificaciones Profesionales y el Instituto Andaluz de Cualificaciones Profesionales.",
+  "Acreditación de competencias profesionales adquiridas por experiencia laboral u otras vías no formales o informales. Normativa reguladora. Naturaleza y características. Información y orientación. Fases del procedimiento. Efectos de las acreditaciones obtenidas. Organización del procedimiento. Funciones y requisitos de las personas que participen en el procedimiento como asesoras y como evaluadoras.",
+  "La Formación Profesional como política activa de empleo. El Catálogo Nacional de Ofertas de Formación Profesional. Estructuración y contenido. Personas destinatarias. Carácter dual de la Formación Profesional. Normativa estatal y autonómica de referencia.",
+  "Centros de formación profesional. Registro General de Centros de Formación Profesional. Escuelas de Formación del Servicio Andaluz de Empleo. Los Centros Integrados. Los Centros de Referencia Nacional.",
+  "Programas públicos mixtos de empleo-formación. Normativa reguladora. Otros programas de empleo-formación en el ámbito de la Comunidad Autónoma de Andalucía.",
+  "La perspectiva territorial en las políticas activas de empleo. La promoción del desarrollo y la actividad económica territorial en Andalucía en el marco de la Estrategia Española de Apoyo Activo al Empleo. Acciones y medidas previstas. Colectivos prioritarios.",
+  "La Orientación Laboral: Principios, fundamentos y necesidad. Origen y evolución, definición y dimensiones. Principios, funciones. Áreas y fases de intervención. Ámbito y personas destinatarias.",
+  "La Orientación Laboral en el SAE. Objetivos, principios, normativa reguladora, instrumentos, acciones y personas destinatarias. Medidas y Programas Públicos para la mejora de la empleabilidad y la inserción laboral en Andalucía. Objetivos, actuaciones, personas destinatarias y características específicas y comunes.",
+  "Fases del proceso de orientación: Captación y acceso al servicio, acogida, recogida de información, intervención y finalización del proceso. Itinerarios o planes personalizados de actuación como marco de gestión de las políticas activas de empleo. Concepto de itinerario. Personas destinatarias.",
+  "La orientación laboral como método para el desarrollo profesional a lo largo de la vida. Madurez vocacional y autoconocimiento. Proceso de toma de decisiones en la elección de estudios y profesiones. La orientación laboral en el proceso de mejora y mantenimiento del puesto de trabajo. Factores de empleabilidad en los procesos de orientación laboral. Factores estructurales, personales, competenciales y psicosociales.",
+  "El profesional de la inserción laboral y la orientación: Perfil profesional, competencias y carácter multidisciplinar. Rol en los sistemas de orientación. Áreas de intervención.",
+  "Calidad en la orientación laboral: Métodos y procesos de mejora aplicados a la orientación. La evaluación cuantitativa y cualitativa en los procesos de orientación. Técnicas e instrumentos.",
+  "Estrategias para la búsqueda activa de empleo: Análisis del mercado de trabajo. Definición del objetivo profesional. Valoración de las técnicas de búsqueda activa de empleo. Estrategias para la mejora de la empleabilidad.",
+  "Técnicas de Búsqueda Activa de Empleo (I): Autoconocimiento personal. Aptitudes, capacidades y destrezas. Características de personalidad que influyen en el empleo. Autoconocimiento profesional. Preferencias e intereses profesionales. El currículum vitae. Utilidades en la búsqueda de empleo. Estructura, tipos, aspectos formales. La carta de presentación. Objetivos y estructura.",
+  "Técnicas de Búsqueda Activa de Empleo (II). La entrevista de selección: Finalidad y tipos. Fases de la entrevista de selección, estrategias para el abordaje e instrumentos. El marketing personal y la autocandidatura.",
+  "Técnicas de Búsqueda Activa de Empleo (III). La red de contactos. Definición, organización, gestión y mantenimiento. Internet como herramienta de búsqueda de empleo: Portales de empleo y otros servicios. Los medios de comunicación como vía de búsqueda de empleo.",
+  "La entrevista en el proceso de orientación. Definición y tipos de entrevista: estructurada, semiestructurada y no estructurada. Entrevista en grupo. Fases de la entrevista y contenido. Tipos de preguntas. Papel del entrevistador.",
+  "La orientación laboral para la igualdad de oportunidades. Colectivos preferentes de los programas de orientación e inserción laboral. Actuaciones y programas específicos.",
+  "Los Recursos Telemáticos para la Inserción y la Orientación. Sistemas para la obtención de información para demandantes de empleo. Redes de recursos para los profesionales de la inserción y la orientación.",
+  "La Intermediación Laboral: Definición, conceptos fundamentales, objetivos, elementos que intervienen. Procesos y estrategias de intermediación laboral. La intermediación laboral en el Servicio Andaluz de Empleo: Modelo, funciones, programas e iniciativas que desarrolla.",
+  "Agentes de Intermediación en el mercado de trabajo. Los Servicios Públicos de Empleo. Las agencias de colocación, definición y competencias. Las empresas de trabajo temporal (ETT's): su regulación y características. Consultoría de selección de Recursos Humanos. Otros agentes: La búsqueda de empleo en Internet. Características básicas y ventajas.",
+  "La demanda. Inscripción, concepto y modalidades. Situación administrativa de la demanda: causas y acciones asociadas. Información de la demanda: datos personales, formativos, profesionales, de disponibilidad. Las competencias. Derechos y Obligaciones de la persona demandante de empleo. Normativa de referencia.",
+  "Gestión de la demanda. Clasificación profesional. Ocupación: concepto y clasificación de las ocupaciones. La Clasificación Nacional de Ocupaciones (CNO). Normativa de referencia.",
+  "La empresa: definición, estructura, organización y tipología. Formas jurídicas de empresa. La persona emprendedora. Programas para personas emprendedoras.",
+  "Proceso de creación de empresa: estudio de mercado y plan de empresa. Centro de Información y Red de Creación de Empresas. Centros de Apoyo al Desarrollo Empresarial. El Plan de Igualdad en la empresa.",
+  "La Economía Social: sociedades cooperativas y sociedades laborales. Iniciativas de Economía Social en Andalucía: requisitos y normativa reguladora. Programa de Apoyo a la Economía Social.",
+  "El trabajo por cuenta propia. Instrumentos de apoyo y asesoramiento a la creación de empleo autónomo. Ayudas económicas a la constitución de empleo autónomo y a la contratación.",
+  "Definición de la oferta de empleo: Análisis y descripción de puestos de trabajo como base del proceso de gestión de ofertas. Concepto de perfil del puesto o profesiograma. Elaboración del perfil: Modelos, técnicas y herramientas de recogida de información. Ventajas e inconvenientes. Entrevista de recogida de información del puesto con la empresa oferente.",
+  "Gestión de la oferta de empleo y/o servicios: definición conceptual. Procedimiento de gestión. Fases: recepción, alta en el sistema, traslado, búsqueda de candidaturas, comprobación de idoneidad y disponibilidad, seguimiento y conclusión. Criterios de ordenación de candidaturas. Las ofertas en difusión. El papel del personal técnico en la gestión de las ofertas.",
+  "La Red EURES. Definición. La libre circulación de trabajadores. Objetivos de la Red EURES, funciones, evolución y situación actual. Composición. Funciones de la Oficina Europea de Coordinación. Actividades de EURES. Normativa de referencia. La Red EURES del Servicio Andaluz de Empleo.",
+  "La protección de datos personales: Principios, directrices y procedimientos de seguridad, tratamiento de ficheros y derechos de la persona. Normativa de referencia: Regulación jurídica de la Protección de Datos de carácter personal. La Agencia de Protección de Datos. Normativa reguladora de uso de los sistemas informáticos y redes de comunicaciones de la Administración de la Junta de Andalucía por parte de las personas empleadas públicas.",
+  "La calidad en la Administración Pública. Los modelos de Calidad en la Administración: EFQM, CAF, ISO. El Sistema de Gestión integrado. La Política de Calidad. Evaluación de la calidad a través de metodología de estándares. La satisfacción de los grupos de interés. La Red Interadministrativa de Calidad."
+];
+
+const TOTAL = COMMON.length + SPECIFIC.length;
+
+// ─── STATE HELPERS ───
+function getS(type, i) { return localState[`${type}_${i}`] || { status: 'pending', notes: '' }; }
+function setStatus(type, i, status) {
+  const k = `${type}_${i}`;
+  localState[k] = { ...getS(type, i), status };
+  refreshCard(type, i);
+  updateStats();
+  scheduleSave();
+}
+function setNotes(type, i, v) {
+  const k = `${type}_${i}`;
+  localState[k] = { ...getS(type, i), notes: v };
+  scheduleSave();
+}
+window.setStatus = setStatus;
+window.setNotes = setNotes;
+
+// ─── RENDER ───
+function buildCard(type, i) {
+  const title = type === 'common' ? COMMON[i] : SPECIFIC[i];
+  const s = getS(type, i);
+  const color = type === 'common' ? '#7c6fff' : '#c8a96e';
+  const id = `card_${type}_${i}`;
+  const div = document.createElement('div');
+  div.id = id;
+  div.className = `card ${s.status}`;
+  div.dataset.type = type;
+  div.dataset.idx = i;
+  div.dataset.status = s.status;
+  div.dataset.search = title.toLowerCase();
+  div.innerHTML = cardHTML(type, i, title, s, color);
+  return div;
+}
+
+function cardHTML(type, i, title, s, color) {
+  const st = s.status;
+  return `
+    <div class="card-head">
+      <div class="status-pip pip-${st}"></div>
+      <div class="card-meta">
+        <span class="tema-label" style="color:${color}">T.${i+1}</span>
+        <p class="tema-title">${title}</p>
+      </div>
+    </div>
+    <div class="card-actions">
+      <button class="ab ${st==='studying'?'ab-studying':''}" onclick="setStatus('${type}',${i},'studying')">Estudiando</button>
+      <button class="ab ${st==='reviewing'?'ab-reviewing':''}" onclick="setStatus('${type}',${i},'reviewing')">Repaso</button>
+      <button class="ab ${st==='done'?'ab-done':''}" onclick="setStatus('${type}',${i},'done')">✓ Hecho</button>
+      <button class="ab ab-reset" onclick="setStatus('${type}',${i},'pending')">↺</button>
+    </div>
+    <textarea class="nota" placeholder="Notas…" onchange="setNotes('${type}',${i},this.value)">${s.notes||''}</textarea>
+  `;
+}
+
+function refreshCard(type, i) {
+  const card = document.getElementById(`card_${type}_${i}`);
+  if (!card) return;
+  const s = getS(type, i);
+  const color = type === 'common' ? '#7c6fff' : '#c8a96e';
+  const title = type === 'common' ? COMMON[i] : SPECIFIC[i];
+  card.className = `card ${s.status}`;
+  card.dataset.status = s.status;
+  card.innerHTML = cardHTML(type, i, title, s, color);
+  applyView();
+}
+
+function refreshAllCards() {
+  COMMON.forEach((_, i) => refreshCard('common', i));
+  SPECIFIC.forEach((_, i) => refreshCard('specific', i));
+}
+
+function buildGrids() {
+  const cg = document.getElementById('grid-common');
+  const sg = document.getElementById('grid-specific');
+  COMMON.forEach((_, i) => cg.appendChild(buildCard('common', i)));
+  SPECIFIC.forEach((_, i) => sg.appendChild(buildCard('specific', i)));
+}
+
+// ─── STATS ───
+function updateStats() {
+  let done=0, studying=0, reviewing=0, pending=0, cDone=0, sDone=0;
+  COMMON.forEach((_,i) => { const s=getS('common',i).status; if(s==='done'){done++;cDone++;} else if(s==='studying')studying++; else if(s==='reviewing')reviewing++; else pending++; });
+  SPECIFIC.forEach((_,i) => { const s=getS('specific',i).status; if(s==='done'){done++;sDone++;} else if(s==='studying')studying++; else if(s==='reviewing')reviewing++; else pending++; });
+  const pct = Math.round(done/TOTAL*100);
+  setText('hdr-pct', pct+'%');
+  setText('hdr-done', `${done}/${TOTAL}`);
+  setText('cnt-s', studying); setText('cnt-r', reviewing); setText('cnt-d', done); setText('cnt-p', pending);
+  setWidth('bar-global', pct+'%');
+  setText('prog-c', `${cDone}/${COMMON.length}`);
+  setText('prog-s', `${sDone}/${SPECIFIC.length}`);
+  setWidth('bar-c', (cDone/COMMON.length*100)+'%');
+  setWidth('bar-s', (sDone/SPECIFIC.length*100)+'%');
+}
+
+function setText(id, v) { const el=document.getElementById(id); if(el) el.textContent=v; }
+function setWidth(id, v) { const el=document.getElementById(id); if(el) el.style.width=v; }
+
+// ─── VIEW / FILTER ───
+let activeTab = 'common', activeFilter = 'all', searchQ = '';
+
+window.switchTab = (tab, el) => {
+  activeTab = tab;
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('sec-common').style.display = (tab==='all'||tab==='common') ? '' : 'none';
+  document.getElementById('sec-specific').style.display = (tab==='all'||tab==='specific') ? '' : 'none';
+  applyView();
+};
+window.setFilter = (f, el) => {
+  activeFilter = f;
+  document.querySelectorAll('.fbtn').forEach(b=>b.classList.remove('active'));
+  el.classList.add('active');
+  applyView();
+};
+window.doSearch = (v) => { searchQ = v.toLowerCase(); applyView(); };
+
+function applyView() {
+  document.querySelectorAll('.card').forEach(card => {
+    const type = card.dataset.type, status = card.dataset.status, search = card.dataset.search||'';
+    const tabOk = activeTab==='all' || type===activeTab;
+    const filterOk = activeFilter==='all' || status===activeFilter;
+    const searchOk = !searchQ || search.includes(searchQ);
+    card.style.display = (tabOk && filterOk && searchOk) ? '' : 'none';
+  });
+}
+
+// ─── UI HELPERS ───
+function renderUserBar(user) {
+  const bar = document.getElementById('user-bar');
+  if (user) {
+    bar.innerHTML = `
+      <img src="${user.photoURL||''}" class="avatar" onerror="this.style.display='none'">
+      <span class="uname">${user.displayName||user.email}</span>
+      <button class="logout-btn" onclick="logoutUser()">Salir</button>
+    `;
+  } else {
+    bar.innerHTML = '';
+  }
+}
+
+function showLoginScreen() {
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('app').style.display = 'none';
+}
+function hideLoginScreen() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app').style.display = '';
+}
+
+function showSyncIndicator(msg) {
+  const el = document.getElementById('sync-indicator');
+  el.textContent = msg;
+  el.style.opacity = '1';
+}
+function hideSyncIndicator() {
+  const el = document.getElementById('sync-indicator');
+  el.style.opacity = '0';
+}
+
+function showToast(msg, type='success') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = `toast toast-${type} show`;
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove('show'), 3000);
+}
+window.showToast = showToast;
+
+function showSetupModal() {
+  document.getElementById('setup-modal').style.display = 'flex';
+}
+window.closeSetupModal = () => {
+  document.getElementById('setup-modal').style.display = 'none';
+};
+
+window.exportCSV = () => {
+  let csv = '\uFEFFBloque,Tema,Título,Estado,Notas\n';
+  COMMON.forEach((t,i) => { const s=getS('common',i); csv+=`"Común",${i+1},"${t.replace(/"/g,'""')}","${s.status}","${(s.notes||'').replace(/"/g,'""')}"\n`; });
+  SPECIFIC.forEach((t,i) => { const s=getS('specific',i); csv+=`"Específico",${i+1},"${t.replace(/"/g,'""')}","${s.status}","${(s.notes||'').replace(/"/g,'""')}"\n`; });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
+  a.download = 'oposicion_a1_2028.csv';
+  a.click();
+};
+
+// ─── INIT ───
+document.addEventListener('DOMContentLoaded', () => {
+  buildGrids();
+  updateStats();
+  if (!isConfigured) {
+    // Show config banner
+    document.getElementById('config-banner').style.display = 'flex';
+  }
+});
+</script>
+
+<style>
+:root {
+  --bg: #0d0d10;
+  --s1: #131318;
+  --s2: #1a1a22;
+  --border: #22222e;
+  --gold: #c8a96e;
+  --violet: #7c6fff;
+  --green: #3ddc84;
+  --amber: #ffb830;
+  --red: #ff6b6b;
+  --text: #e4e2dd;
+  --muted: #5a5a72;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:'Lato',sans-serif}
+
+/* ── LOGIN ── */
+#login-screen {
+  position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  background:var(--bg);z-index:200;gap:32px;padding:40px;
+}
+.login-logo {
+  font-family:'Syne',sans-serif;font-size:48px;font-weight:800;
+  background:linear-gradient(135deg,var(--violet),var(--gold));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+  letter-spacing:-2px;
+}
+.login-sub { font-family:'Syne',sans-serif;font-size:13px;color:var(--muted);letter-spacing:3px;text-transform:uppercase;text-align:center;max-width:280px; }
+.login-card {
+  background:var(--s1);border:1px solid var(--border);border-radius:16px;padding:32px;
+  display:flex;flex-direction:column;gap:20px;align-items:center;max-width:360px;width:100%;
+}
+.login-title { font-family:'Syne',sans-serif;font-size:20px;font-weight:700;text-align:center; }
+.login-desc { font-size:13px;color:var(--muted);text-align:center;line-height:1.6; }
+.google-btn {
+  display:flex;align-items:center;gap:12px;padding:14px 24px;
+  background:#fff;color:#3c4043;font-family:'Syne',sans-serif;font-size:14px;font-weight:600;
+  border:none;border-radius:8px;cursor:pointer;width:100%;justify-content:center;
+  transition:box-shadow 0.2s,transform 0.1s;
+}
+.google-btn:hover{box-shadow:0 4px 16px rgba(0,0,0,0.4);transform:translateY(-1px);}
+.google-btn:active{transform:translateY(0);}
+.google-btn svg{width:20px;height:20px;flex-shrink:0}
+.login-note { font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted);text-align:center;line-height:1.6;border-top:1px solid var(--border);padding-top:16px;width:100%; }
+
+/* ── APP LAYOUT ── */
+#app { display:flex;flex-direction:column;height:100%;overflow:hidden; }
+
+/* ── CONFIG BANNER ── */
+#config-banner {
+  background:linear-gradient(90deg,rgba(255,184,48,0.12),rgba(200,169,110,0.08));
+  border-bottom:1px solid rgba(255,184,48,0.25);
+  padding:10px 16px;display:none;align-items:center;gap:10px;flex-shrink:0;
+}
+.banner-icon{font-size:16px}
+.banner-text{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--amber);flex:1;line-height:1.4}
+.banner-btn{
+  font-family:'Syne',sans-serif;font-size:10px;font-weight:700;letter-spacing:1px;
+  text-transform:uppercase;padding:6px 12px;background:var(--amber);color:#000;
+  border:none;border-radius:4px;cursor:pointer;white-space:nowrap;flex-shrink:0;
+}
+
+/* ── HEADER ── */
+header {
+  background:rgba(13,13,16,0.96);backdrop-filter:blur(20px);
+  padding:calc(10px + var(--safe-top)) 16px 10px;
+  border-bottom:1px solid var(--border);flex-shrink:0;
+}
+.hdr-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.hdr-title{font-family:'Syne',sans-serif;font-size:20px;font-weight:800;letter-spacing:-0.5px}
+.hdr-title span{color:var(--gold)}
+.hdr-right{text-align:right}
+.hdr-pct{font-family:'Syne',sans-serif;font-size:26px;font-weight:800;color:var(--gold);line-height:1}
+.hdr-done{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted);letter-spacing:1px}
+.sync-indicator{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--violet);margin-left:8px;opacity:0;transition:opacity 0.3s}
+.bar-global-wrap{height:3px;background:var(--border);border-radius:2px;margin-bottom:10px}
+.bar-global-fill{height:100%;border-radius:2px;background:linear-gradient(90deg,var(--violet),var(--gold));transition:width 0.5s}
+.mini-counts{display:flex;gap:14px;flex-wrap:wrap}
+.mini-c{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted);display:flex;align-items:center;gap:4px}
+.pip{width:7px;height:7px;border-radius:50%}
+.pip-s{background:var(--violet)}.pip-r{background:var(--amber)}.pip-d{background:var(--green)}.pip-p{background:var(--border)}
+
+/* ── USER BAR ── */
+#user-bar{display:flex;align-items:center;gap:8px;padding:6px 0 0;flex-wrap:wrap}
+.avatar{width:22px;height:22px;border-radius:50%;border:1px solid var(--border)}
+.uname{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.logout-btn{font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;padding:4px 8px;border:1px solid var(--border);background:transparent;color:var(--muted);border-radius:3px;cursor:pointer}
+.logout-btn:hover{color:var(--red);border-color:var(--red)}
+
+/* ── TABS ── */
+.tabs{display:flex;background:var(--s1);border-bottom:1px solid var(--border);flex-shrink:0}
+.tab{flex:1;padding:11px 4px;text-align:center;font-family:'Syne',sans-serif;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;transition:all 0.2s;user-select:none}
+.tab.active{color:var(--gold);border-bottom-color:var(--gold);background:rgba(200,169,110,0.04)}
+.tab:first-child.active{color:var(--violet);border-bottom-color:var(--violet);background:rgba(124,111,255,0.04)}
+
+/* ── FILTER BAR ── */
+.filter-bar{display:flex;gap:6px;padding:8px 12px;background:var(--bg);border-bottom:1px solid var(--border);overflow-x:auto;flex-shrink:0;scrollbar-width:none}
+.filter-bar::-webkit-scrollbar{display:none}
+.fbtn{flex-shrink:0;font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;padding:5px 12px;border:1px solid var(--border);background:transparent;color:var(--muted);border-radius:20px;cursor:pointer;transition:all 0.15s;white-space:nowrap}
+.fbtn.active,.fbtn:hover{color:var(--text);border-color:var(--text);background:rgba(255,255,255,0.04)}
+
+/* ── SEARCH ── */
+#search-wrap{display:none;padding:8px 12px;background:var(--bg);border-bottom:1px solid var(--border);flex-shrink:0}
+#search-wrap.open{display:block}
+.search-in{width:100%;background:var(--s1);border:1px solid var(--border);color:var(--text);font-family:'Lato',sans-serif;font-size:13px;padding:9px 12px;border-radius:8px}
+.search-in:focus{outline:none;border-color:var(--muted)}
+.search-in::placeholder{color:var(--muted)}
+
+/* ── CONTENT ── */
+.content{flex:1;overflow-y:auto;padding:12px 12px calc(12px + var(--safe-bottom));-webkit-overflow-scrolling:touch}
+
+/* ── SECTION ── */
+.sec-hdr{display:flex;justify-content:space-between;align-items:baseline;padding:16px 0 8px;border-bottom:1px solid var(--border)}
+.sec-title{font-family:'Syne',sans-serif;font-size:14px;font-weight:800;letter-spacing:2px;text-transform:uppercase}
+.sec-prog{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted)}
+.sec-bar-wrap{height:2px;background:var(--border);border-radius:1px;margin-bottom:14px;margin-top:6px}
+.sec-bar-fill{height:100%;border-radius:1px;transition:width 0.4s}
+
+/* ── CARD ── */
+.card{background:var(--s1);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:8px;transition:border-color 0.2s,background 0.2s}
+.card.studying{border-color:rgba(124,111,255,0.45);background:rgba(124,111,255,0.04)}
+.card.reviewing{border-color:rgba(255,184,48,0.35);background:rgba(255,184,48,0.03)}
+.card.done{border-color:rgba(61,220,132,0.35);background:rgba(61,220,132,0.03)}
+.card-head{display:flex;gap:10px;margin-bottom:10px}
+.status-pip{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:5px;transition:background 0.2s}
+.pip-pending{background:var(--border)}
+.pip-studying{background:var(--violet);box-shadow:0 0 6px rgba(124,111,255,0.5)}
+.pip-reviewing{background:var(--amber)}
+.pip-done{background:var(--green)}
+.card-meta{flex:1;min-width:0}
+.tema-label{font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:2px;text-transform:uppercase;display:block;margin-bottom:3px}
+.tema-title{font-size:12.5px;line-height:1.55;color:var(--text);font-weight:300}
+.card-actions{display:flex;gap:5px;flex-wrap:wrap}
+.ab{font-family:'Syne',sans-serif;font-size:9px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;padding:5px 10px;border:1px solid var(--border);background:transparent;color:var(--muted);border-radius:5px;cursor:pointer;flex:1;text-align:center;transition:all 0.15s;white-space:nowrap}
+.ab:active{opacity:0.7}
+.ab-studying{border-color:var(--violet)!important;color:var(--violet)!important;background:rgba(124,111,255,0.12)!important}
+.ab-reviewing{border-color:var(--amber)!important;color:var(--amber)!important;background:rgba(255,184,48,0.1)!important}
+.ab-done{border-color:var(--green)!important;color:var(--green)!important;background:rgba(61,220,132,0.1)!important}
+.ab-reset{max-width:36px;font-size:14px;flex:0 0 36px;color:var(--muted)}
+.nota{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--muted);font-family:'Lato',sans-serif;font-size:12px;padding:7px 10px;border-radius:6px;resize:none;height:36px;margin-top:8px;transition:height 0.2s,border-color 0.2s,color 0.2s}
+.nota:focus{outline:none;border-color:var(--muted);color:var(--text);height:68px}
+.nota::placeholder{color:var(--border)}
+
+/* ── TOAST ── */
+.toast{position:fixed;bottom:calc(20px + var(--safe-bottom));left:50%;transform:translateX(-50%) translateY(20px);background:var(--s2);border:1px solid var(--border);color:var(--text);font-family:'JetBrains Mono',monospace;font-size:11px;padding:10px 18px;border-radius:8px;opacity:0;transition:all 0.3s;pointer-events:none;white-space:nowrap;z-index:500;max-width:90vw;text-align:center}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+.toast-success{border-color:rgba(61,220,132,0.4);color:var(--green)}
+.toast-error{border-color:rgba(255,107,107,0.4);color:var(--red)}
+.toast-sync{border-color:rgba(124,111,255,0.4);color:var(--violet)}
+
+/* ── SETUP MODAL ── */
+#setup-modal{position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:300;display:none;align-items:center;justify-content:center;padding:20px}
+.modal-box{background:var(--s1);border:1px solid var(--border);border-radius:16px;padding:28px;max-width:500px;width:100%;max-height:85vh;overflow-y:auto}
+.modal-title{font-family:'Syne',sans-serif;font-size:20px;font-weight:800;margin-bottom:6px}
+.modal-sub{font-size:13px;color:var(--muted);margin-bottom:24px}
+.step{display:flex;gap:14px;margin-bottom:18px;align-items:flex-start}
+.step-num{font-family:'Syne',sans-serif;font-size:13px;font-weight:800;color:var(--gold);background:rgba(200,169,110,0.12);border:1px solid rgba(200,169,110,0.25);border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px}
+.step-content{flex:1}
+.step-title{font-family:'Syne',sans-serif;font-size:13px;font-weight:700;margin-bottom:4px}
+.step-desc{font-size:12px;color:var(--muted);line-height:1.6}
+.step-code{font-family:'JetBrains Mono',monospace;font-size:10px;background:var(--bg);border:1px solid var(--border);border-radius:5px;padding:8px 10px;margin-top:8px;color:var(--green);line-height:1.7;overflow-x:auto;white-space:pre}
+.step-link{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--violet);text-decoration:none;border-bottom:1px solid rgba(124,111,255,0.3)}
+.modal-close{width:100%;margin-top:20px;font-family:'Syne',sans-serif;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;padding:12px;background:var(--s2);border:1px solid var(--border);color:var(--text);border-radius:8px;cursor:pointer}
+
+/* ── FAB ── */
+.fab{position:fixed;bottom:calc(16px + var(--safe-bottom));right:16px;width:50px;height:50px;border-radius:50%;background:linear-gradient(135deg,var(--violet),var(--gold));border:none;color:#fff;font-size:20px;cursor:pointer;box-shadow:0 4px 16px rgba(124,111,255,0.35);z-index:50;display:flex;align-items:center;justify-content:center;transition:transform 0.2s}
+.fab:active{transform:scale(0.9)}
+.export-btn{display:block;width:100%;margin-top:10px;font-family:'Syne',sans-serif;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;padding:11px;border:1px solid var(--gold);background:rgba(200,169,110,0.06);color:var(--gold);border-radius:6px;cursor:pointer;text-align:center}
+</style>
+</head>
+<body>
+
+<!-- LOGIN SCREEN -->
+<div id="login-screen" style="display:flex">
+  <div class="login-logo">A1.2028</div>
+  <div class="login-sub">Tracker · Ciencias Sociales y del Trabajo</div>
+  <div class="login-card">
+    <div class="login-title">Inicia sesión para guardar tu progreso</div>
+    <div class="login-desc">Tu progreso se guarda en la nube y estará disponible en cualquier dispositivo.</div>
+    <button class="google-btn" onclick="loginGoogle()">
+      <svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+      Continuar con Google
+    </button>
+    <div class="login-note">
+      ⚠️ Si aún no has configurado Firebase,<br>
+      <span style="cursor:pointer;color:var(--amber);text-decoration:underline" onclick="document.getElementById('setup-modal').style.display='flex'">
+        pulsa aquí para ver las instrucciones
+      </span>
+    </div>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app" style="display:none">
+
+  <!-- CONFIG BANNER -->
+  <div id="config-banner">
+    <span class="banner-icon">⚠️</span>
+    <span class="banner-text">Firebase no está configurado. El progreso no se guardará en la nube.</span>
+    <button class="banner-btn" onclick="document.getElementById('setup-modal').style.display='flex'">Ver guía</button>
+  </div>
+
+  <!-- HEADER -->
+  <header>
+    <div class="hdr-top">
+      <div>
+        <div class="hdr-title">A1<span>.2028</span></div>
+        <div id="user-bar"></div>
+      </div>
+      <div class="hdr-right">
+        <div class="hdr-pct" id="hdr-pct">0%</div>
+        <div class="hdr-done" id="hdr-done">0/105 <span class="sync-indicator" id="sync-indicator"></span></div>
+      </div>
+    </div>
+    <div class="bar-global-wrap"><div class="bar-global-fill" id="bar-global" style="width:0%"></div></div>
+    <div class="mini-counts">
+      <div class="mini-c"><div class="pip pip-s"></div><span id="cnt-s">0</span> estud.</div>
+      <div class="mini-c"><div class="pip pip-r"></div><span id="cnt-r">0</span> repaso</div>
+      <div class="mini-c"><div class="pip pip-d"></div><span id="cnt-d">0</span> hecho</div>
+      <div class="mini-c"><div class="pip pip-p"></div><span id="cnt-p">105</span> pend.</div>
+    </div>
+  </header>
+
+  <!-- TABS -->
+  <div class="tabs">
+    <div class="tab active" onclick="switchTab('common',this)">Común (35)</div>
+    <div class="tab" onclick="switchTab('specific',this)">Específico (70)</div>
+    <div class="tab" onclick="switchTab('all',this)">Todo (105)</div>
+  </div>
+
+  <!-- FILTER BAR -->
+  <div class="filter-bar">
+    <button class="fbtn active" onclick="setFilter('all',this)">Todos</button>
+    <button class="fbtn" onclick="setFilter('pending',this)">Pendiente</button>
+    <button class="fbtn" onclick="setFilter('studying',this)">Estudiando</button>
+    <button class="fbtn" onclick="setFilter('reviewing',this)">Repaso</button>
+    <button class="fbtn" onclick="setFilter('done',this)">✓ Hecho</button>
+    <button class="fbtn" onclick="toggleSearch()">🔍</button>
+  </div>
+
+  <!-- SEARCH -->
+  <div id="search-wrap">
+    <input class="search-in" type="search" placeholder="Buscar tema…" oninput="doSearch(this.value)">
+  </div>
+
+  <!-- CONTENT -->
+  <div class="content">
+
+    <div id="sec-common">
+      <div class="sec-hdr">
+        <div class="sec-title" style="color:var(--violet)">Temario Común</div>
+        <div class="sec-prog" id="prog-c">0/35</div>
+      </div>
+      <div class="sec-bar-wrap"><div class="sec-bar-fill" id="bar-c" style="width:0%;background:var(--violet)"></div></div>
+      <div id="grid-common"></div>
+    </div>
+
+    <div id="sec-specific" style="display:none">
+      <div class="sec-hdr">
+        <div class="sec-title" style="color:var(--gold)">Temario Específico</div>
+        <div class="sec-prog" id="prog-s">0/70</div>
+      </div>
+      <div class="sec-bar-wrap"><div class="sec-bar-fill" id="bar-s" style="width:0%;background:var(--gold)"></div></div>
+      <div id="grid-specific"></div>
+    </div>
+
+  </div>
+
+  <!-- FAB: export -->
+  <button class="fab" onclick="exportCSV()" title="Exportar CSV">⬇</button>
+
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<!-- SETUP MODAL -->
+<div id="setup-modal">
+  <div class="modal-box">
+    <div class="modal-title">Configurar Firebase</div>
+    <div class="modal-sub">Sigue estos 8 pasos, tarda unos 10 minutos y es completamente gratis.</div>
+
+    <div class="step">
+      <div class="step-num">1</div>
+      <div class="step-content">
+        <div class="step-title">Crear proyecto Firebase</div>
+        <div class="step-desc">Ve a <a class="step-link" href="https://console.firebase.google.com" target="_blank">console.firebase.google.com</a> → <b>Añadir proyecto</b> → ponle un nombre (ej: "oposicion-2028") → desactiva Analytics → Crear.</div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">2</div>
+      <div class="step-content">
+        <div class="step-title">Registrar la app web</div>
+        <div class="step-desc">En tu proyecto → icono <b>&lt;/&gt;</b> (Web) → ponle un nombre → Registrar app. Copia el objeto <code>firebaseConfig</code> que aparece.</div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">3</div>
+      <div class="step-content">
+        <div class="step-title">Pegar la configuración en este archivo</div>
+        <div class="step-desc">Abre este archivo .html con un editor de texto (Notepad, etc). Busca la sección <code>firebaseConfig</code> y reemplaza los valores de ejemplo por los tuyos.</div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">4</div>
+      <div class="step-content">
+        <div class="step-title">Activar inicio de sesión con Google</div>
+        <div class="step-desc">En Firebase Console → <b>Authentication</b> → <b>Comenzar</b> → pestaña <b>Proveedores</b> → <b>Google</b> → activar → guardar.</div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">5</div>
+      <div class="step-content">
+        <div class="step-title">Crear la base de datos Firestore</div>
+        <div class="step-desc">En Firebase Console → <b>Firestore Database</b> → <b>Crear base de datos</b> → Modo producción → elige región <b>europe-west1</b> (o la más cercana) → Crear.</div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">6</div>
+      <div class="step-content">
+        <div class="step-title">Configurar las reglas de seguridad</div>
+        <div class="step-desc">En Firestore → pestaña <b>Reglas</b> → borra el contenido y pega esto → <b>Publicar</b>:</div>
+        <div class="step-code">rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId}/{document=**} {
+      allow read, write: if request.auth != null
+        && request.auth.uid == userId;
+    }
+  }
+}</div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">7</div>
+      <div class="step-content">
+        <div class="step-title">Añadir tu dominio autorizado</div>
+        <div class="step-desc">Si abres el archivo directamente desde tu ordenador, ve a Firebase Console → Authentication → <b>Configuración</b> → <b>Dominios autorizados</b> → añade <code>localhost</code>. Si usas GitHub Pages u otro hosting, añade ese dominio.</div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">8</div>
+      <div class="step-content">
+        <div class="step-title">¡Listo! Abre el archivo y accede con Google</div>
+        <div class="step-desc">Abre el archivo .html en Chrome, pulsa <b>Continuar con Google</b> y tu progreso se guardará automáticamente en la nube cada vez que hagas un cambio.</div>
+      </div>
+    </div>
+
+    <button class="modal-close" onclick="closeSetupModal()">Entendido, cerrar</button>
+  </div>
+</div>
+
+<script>
+function toggleSearch() {
+  const w = document.getElementById('search-wrap');
+  w.classList.toggle('open');
+  if (w.classList.contains('open')) w.querySelector('input').focus();
+  else { doSearch(''); w.querySelector('input').value = ''; }
+}
+</script>
+
+</body>
+</html>
